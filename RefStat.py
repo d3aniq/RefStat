@@ -34,7 +34,7 @@ if "data" not in st.session_state:
     st.session_state["data"] = None
 
 # File path for the CSV file
-file_path = "referee_match_data_230811_241212.csv"
+file_path = "vsibf.csv"
 
 # Auto-load data if not already loaded
 if st.session_state["data"] is None:
