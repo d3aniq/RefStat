@@ -1,365 +1,493 @@
 import streamlit as st
 import pandas as pd
-import os
 from datetime import datetime, timedelta
-import io
+import plotly.express as px
+import plotly.graph_objects as go
+import os
 
 # Set page configuration
 st.set_page_config(
     page_title="RefStat - Domarstatistik",
     page_icon="🏆",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# Apply custom CSS for better styling
+# Custom CSS for improved styling
 st.markdown("""
-    <style>
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-    }
-    h1, h2, h3 {
+<style>
+    .main-header {
+        font-size: 2.5rem;
         color: #1E3A8A;
+        text-align: center;
+        margin-bottom: 1rem;
+        font-weight: 700;
+    }
+    .sub-header {
+        font-size: 1.5rem;
+        color: #1E3A8A;
+        margin-top: 2rem;
+        margin-bottom: 1rem;
+        font-weight: 600;
     }
     .stButton>button {
         background-color: #1E3A8A;
         color: white;
-        border-radius: 5px;
+        font-weight: 600;
+        border-radius: 6px;
+        padding: 0.5rem 1rem;
+        border: none;
     }
     .stButton>button:hover {
-        background-color: #2563EB;
+        background-color: #3B82F6;
     }
-    </style>
-    """, unsafe_allow_html=True)
+    div[data-testid="stDataFrame"] {
+        margin-top: 1rem;
+        border-radius: 6px;
+        overflow: hidden;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    .footer {
+        text-align: center;
+        margin-top: 3rem;
+        font-size: 0.8rem;
+        color: #6B7280;
+    }
+    .metric-card {
+        background-color: #F3F4F6;
+        border-radius: 8px;
+        padding: 1rem;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        text-align: center;
+        margin-bottom: 1rem;
+    }
+    .metric-value {
+        font-size: 2rem;
+        font-weight: 700;
+        color: #1E3A8A;
+    }
+    .metric-label {
+        font-size: 1rem;
+        color: #6B7280;
+    }
+    .warning {
+        background-color: #FEF3C7;
+        color: #92400E;
+        padding: 0.75rem;
+        border-radius: 6px;
+        margin-bottom: 1rem;
+    }
+    .success {
+        background-color: #D1FAE5;
+        color: #065F46;
+        padding: 0.75rem;
+        border-radius: 6px;
+        margin-bottom: 1rem;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# Function to load data from a local file path with error handling
+# Session state initialization
+if "data" not in st.session_state:
+    st.session_state["data"] = None
+if "filtered_data" not in st.session_state:
+    st.session_state["filtered_data"] = None
+if "show_stats" not in st.session_state:
+    st.session_state["show_stats"] = False
+if "error" not in st.session_state:
+    st.session_state["error"] = None
+
+# Function to load data from a local file path
 @st.cache_data
 def load_data_from_path(file_path):
-    """Load and preprocess the CSV data file."""
     try:
-        if not os.path.exists(file_path):
-            st.error(f"File not found: {file_path}")
-            return None
-        
         df = pd.read_csv(file_path)
-        
-        # Data validation
-        required_columns = ["Date", "Domare", "Matcher"]
-        if not all(col in df.columns for col in required_columns):
-            missing = [col for col in required_columns if col not in df.columns]
-            st.error(f"Missing required columns: {', '.join(missing)}")
-            return None
-        
-        # Convert Date to datetime once
-        df["DateObj"] = pd.to_datetime(df["Date"], errors='coerce')
-        
-        # Check for invalid dates
-        invalid_dates = df[df["DateObj"].isna()]
-        if not invalid_dates.empty:
-            st.warning(f"Found {len(invalid_dates)} rows with invalid dates. These will be excluded.")
-            df = df.dropna(subset=["DateObj"])
-            
+        # Convert Date column to datetime
+        df["Date"] = pd.to_datetime(df["Date"], errors='coerce')
         return df
-    
-    except pd.errors.ParserError:
-        st.error("Failed to parse the CSV file. Please check the file format.")
-        return None
     except Exception as e:
-        st.error(f"Error loading data: {e}")
+        st.session_state["error"] = f"Kunde inte ladda data: {str(e)}"
         return None
 
-# Function to filter data by date range
-def filter_data(df, start_date, end_date, selected_districts=None, selected_series=None):
-    """Filter data based on date range and other criteria."""
+# Function to filter data by date range and other criteria
+def filter_data_by_date(df, start_date, end_date, sport=None, district=None, min_matches=None):
     if df is None:
         return None
     
-    filtered_df = df.copy()
-    
-    # Convert input dates to pandas datetime
-    start_date_pd = pd.to_datetime(start_date)
-    end_date_pd = pd.to_datetime(end_date)
-    
-    # Filter by date range
-    filtered_df = filtered_df[(filtered_df["DateObj"] >= start_date_pd) & 
-                             (filtered_df["DateObj"] <= end_date_pd)]
-    
-    # Filter by district if available and selected
-    if "Förbund" in filtered_df.columns and selected_districts:
-        if not isinstance(selected_districts, list):
-            selected_districts = [selected_districts]
-        filtered_df = filtered_df[filtered_df["Förbund"].isin(selected_districts)]
-    
-    # Filter by series if available and selected
-    if "Serie" in filtered_df.columns and selected_series:
-        if not isinstance(selected_series, list):
-            selected_series = [selected_series]
-        filtered_df = filtered_df[filtered_df["Serie"].isin(selected_series)]
-    
-    return filtered_df
+    try:
+        filtered_df = df.copy()
+        
+        # Filter by date range
+        filtered_df = filtered_df[(filtered_df["Date"] >= pd.to_datetime(start_date)) & 
+                                  (filtered_df["Date"] <= pd.to_datetime(end_date))]
+        
+        # Apply additional filters if provided
+        if sport and sport != "Alla":
+            filtered_df = filtered_df[filtered_df["Sport"] == sport]
+        
+        if district and district != "Alla":
+            filtered_df = filtered_df[filtered_df["District"] == district]
+        
+        # Group by referee and sum matches
+        grouped = filtered_df.groupby("Domare")["Matcher"].sum().reset_index()
+        
+        # Apply minimum matches filter if provided
+        if min_matches and min_matches > 0:
+            grouped = grouped[grouped["Matcher"] >= min_matches]
+        
+        # Sort by matches descending
+        grouped = grouped.sort_values(by="Matcher", ascending=False).reset_index(drop=True)
+        
+        return grouped, filtered_df
+    except Exception as e:
+        st.session_state["error"] = f"Fel vid filtrering av data: {str(e)}"
+        return None, None
 
 # Function to generate referee statistics
 def generate_referee_stats(filtered_df):
-    """Generate statistics grouped by referee."""
     if filtered_df is None or filtered_df.empty:
         return None
     
-    # Group by referee and sum matches
-    grouped = filtered_df.groupby("Domare")["Matcher"].sum().reset_index()
+    stats = {}
     
-    # Sort by matches descending
-    grouped = grouped.sort_values(by="Matcher", ascending=False).reset_index(drop=True)
+    # Total matches in the period
+    stats["total_matches"] = filtered_df["Matcher"].sum()
     
-    # Add rank column
-    grouped.index = grouped.index + 1
-    grouped = grouped.rename_axis('Rank').reset_index()
+    # Total unique referees
+    stats["total_referees"] = filtered_df["Domare"].nunique()
     
-    return grouped
+    # Average matches per referee
+    stats["avg_matches"] = stats["total_matches"] / stats["total_referees"] if stats["total_referees"] > 0 else 0
+    
+    # Most active referee
+    most_active = filtered_df.groupby("Domare")["Matcher"].sum().sort_values(ascending=False)
+    stats["most_active"] = most_active.index[0] if len(most_active) > 0 else "N/A"
+    stats["most_active_count"] = most_active.iloc[0] if len(most_active) > 0 else 0
+    
+    return stats
 
-# Function to create basic charts with Streamlit's native plotting
-def create_basic_charts(stats_df, filtered_df):
-    """Create basic visualizations using Streamlit's native chart capabilities."""
-    if stats_df is None or stats_df.empty:
-        return
+# Function to create visualizations
+def create_visualizations(result_df, filtered_raw_df):
+    visualizations = {}
     
-    col1, col2 = st.columns(2)
+    if result_df is None or result_df.empty:
+        return visualizations
     
-    with col1:
-        # Top referees bar chart
-        top_n = min(15, len(stats_df))
-        st.subheader(f"Top {top_n} Referees by Number of Matches")
-        st.bar_chart(stats_df.head(top_n).set_index("Domare")["Matcher"])
+    # 1. Top referees bar chart
+    top_n = min(10, len(result_df))
+    top_referees = result_df.head(top_n)
+    fig_top = px.bar(
+        top_referees,
+        x="Domare",
+        y="Matcher",
+        title=f"Topp {top_n} Domare efter Antal Matcher",
+        labels={"Domare": "Domare", "Matcher": "Antal Matcher"},
+        color="Matcher",
+        color_continuous_scale="Blues",
+    )
+    fig_top.update_layout(
+        xaxis_title="Domare",
+        yaxis_title="Antal Matcher",
+        xaxis={'categoryorder':'total descending'},
+        plot_bgcolor="white",
+        font=dict(family="Arial", size=12),
+    )
+    visualizations["top_referees"] = fig_top
     
-    with col2:
-        # Monthly match distribution if we have date data
-        if "DateObj" in filtered_df.columns:
-            st.subheader("Monthly Distribution of Matches")
-            filtered_df['Month'] = filtered_df["DateObj"].dt.strftime('%Y-%m')
-            monthly_data = filtered_df.groupby('Month')["Matcher"].sum().reset_index()
-            
-            # Sort by date
-            monthly_data['SortDate'] = pd.to_datetime(monthly_data['Month'])
-            monthly_data = monthly_data.sort_values('SortDate')
-            
-            # Plot the chart
-            st.line_chart(monthly_data.set_index('Month')["Matcher"])
+    # 2. Distribution of matches histogram
+    fig_dist = px.histogram(
+        result_df,
+        x="Matcher",
+        nbins=20,
+        title="Fördelning av Matcher per Domare",
+        labels={"Matcher": "Antal Matcher", "count": "Antal Domare"},
+        color_discrete_sequence=["#1E3A8A"],
+    )
+    fig_dist.update_layout(
+        xaxis_title="Antal Matcher",
+        yaxis_title="Antal Domare",
+        plot_bgcolor="white",
+        bargap=0.1,
+    )
+    visualizations["match_distribution"] = fig_dist
+    
+    # 3. Matches over time (if raw data is available)
+    if filtered_raw_df is not None and not filtered_raw_df.empty and "Date" in filtered_raw_df.columns:
+        # Aggregate matches by date
+        matches_by_date = filtered_raw_df.groupby(filtered_raw_df["Date"].dt.date)["Matcher"].sum().reset_index()
+        fig_time = px.line(
+            matches_by_date,
+            x="Date",
+            y="Matcher",
+            title="Matcher över Tid",
+            labels={"Date": "Datum", "Matcher": "Antal Matcher"},
+            markers=True,
+        )
+        fig_time.update_layout(
+            xaxis_title="Datum",
+            yaxis_title="Antal Matcher",
+            plot_bgcolor="white",
+        )
+        visualizations["matches_over_time"] = fig_time
+    
+    return visualizations
 
-# Function to export data
-def get_downloadable_data(stats_df, format_type="csv"):
-    """Prepare data for download in various formats."""
-    if stats_df is None or stats_df.empty:
-        return None, None
-    
-    if format_type == "csv":
-        buffer = io.StringIO()
-        stats_df.to_csv(buffer, index=False)
-        return buffer.getvalue(), "text/csv"
-    elif format_type == "excel":
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
-            stats_df.to_excel(writer, sheet_name="RefStats", index=False)
-        return buffer.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    else:
-        return None, None
-
-# Main Streamlit App
+# Main application layout
 def main():
-    st.title("🏆 RefStat - Domarstatistik")
-    st.markdown("Analysera och visualisera domarstatistik för matcher")
+    # Header with logo (emoji as placeholder)
+    st.markdown('<div class="main-header">🏆 RefStat - Domarstatistik</div>', unsafe_allow_html=True)
     
-    # Initialize session state for data
-    if "data" not in st.session_state:
-        st.session_state["data"] = None
-    
-    # File path for the CSV file
-    file_path = "vsibf.csv"
-    
-    # Add file uploader option
-    uploaded_file = st.file_uploader("Ladda upp egen CSV-fil (frivilligt)", type=["csv"])
-    
-    # Load data from uploaded file or default path
-    if uploaded_file is not None:
-        try:
-            data = pd.read_csv(uploaded_file)
-            if "Date" in data.columns and "Domare" in data.columns and "Matcher" in data.columns:
-                st.session_state["data"] = data
-                st.success("Data har laddats upp framgångsrikt!")
-            else:
-                st.error("Filen saknar nödvändiga kolumner (Date, Domare, Matcher).")
-        except Exception as e:
-            st.error(f"Fel vid uppladdning av fil: {e}")
-    # Auto-load data if not already loaded
-    elif st.session_state["data"] is None:
-        data = load_data_from_path(file_path)
-        if data is not None:
-            st.session_state["data"] = data
-            st.info(f"Standarddata laddad från {file_path}")
-        else:
-            st.error(f"Kunde inte ladda standarddata. Vänligen ladda upp en CSV-fil.")
-    
-    # Display filter options if data is available
-    if st.session_state["data"] is not None:
-        with st.expander("Filteralternativ", expanded=True):
-            col1, col2 = st.columns(2)
-            
-            # Find the min and max dates in the dataset
-            df = st.session_state["data"]
-            min_date = df["DateObj"].min().date()
-            max_date = df["DateObj"].max().date()
-            
-            # Display dropdowns and date inputs
-            with col1:
-                # Sport dropdown (could be dynamic if data contains multiple sports)
-                available_sports = ["Innebandy"]
-                if "Idrott" in df.columns:
-                    available_sports = sorted(df["Idrott"].unique().tolist())
-                sport = st.selectbox("Idrott", available_sports, index=0)
-                
-                # District dropdown (could be dynamic)
-                available_districts = ["Västsvenska"]
-                if "Förbund" in df.columns:
-                    available_districts = sorted(df["Förbund"].unique().tolist())
-                district = st.selectbox("Förbund", available_districts, index=0)
-                
-                # Add series filter if available
-                series_filter = None
-                if "Serie" in df.columns:
-                    available_series = sorted(df["Serie"].unique().tolist())
-                    series_filter = st.multiselect("Serie", available_series)
-            
-            with col2:
-                # Date range selection
-                start_date = st.date_input("Från", value=min_date, min_value=min_date, max_value=max_date)
-                end_date = st.date_input("Till", value=max_date, min_value=min_date, max_value=max_date)
-                
-                # Quick date presets
-                st.write("Snabbval för datumintervall:")
-                date_col1, date_col2, date_col3 = st.columns(3)
-                
-                with date_col1:
-                    if st.button("Senaste månaden"):
-                        end_date = max_date
-                        start_date = max_date - timedelta(days=30)
-                        st.session_state["start_date"] = start_date
-                        st.session_state["end_date"] = end_date
-                        st.experimental_rerun()
-                
-                with date_col2:
-                    if st.button("Senaste 3 månaderna"):
-                        end_date = max_date
-                        start_date = max_date - timedelta(days=90)
-                        st.session_state["start_date"] = start_date
-                        st.session_state["end_date"] = end_date
-                        st.experimental_rerun()
-                
-                with date_col3:
-                    if st.button("Allt"):
-                        start_date = min_date
-                        end_date = max_date
-                        st.session_state["start_date"] = start_date
-                        st.session_state["end_date"] = end_date
-                        st.experimental_rerun()
+    # Sidebar for controls
+    with st.sidebar:
+        st.markdown("### Inställningar")
         
-        # Apply filters and display results
-        if st.button("Visa Statistik", use_container_width=True):
-            if start_date > end_date:
-                st.error("Startdatum måste vara före eller samma som slutdatum.")
+        # File upload option
+        uploaded_file = st.file_uploader("Ladda upp CSV-fil", type=["csv"])
+        
+        # Or use default file
+        use_default = st.checkbox("Använd standardfil", value=True)
+        
+        if uploaded_file is not None:
+            # User uploaded a file
+            st.session_state["data"] = pd.read_csv(uploaded_file)
+            st.session_state["data"]["Date"] = pd.to_datetime(st.session_state["data"]["Date"], errors='coerce')
+        elif use_default:
+            # Use the default file
+            file_path = "vsibf.csv"
+            if os.path.exists(file_path):
+                st.session_state["data"] = load_data_from_path(file_path)
             else:
-                with st.spinner("Bearbetar data..."):
+                st.warning(f"Standardfilen '{file_path}' hittades inte.")
+                st.session_state["data"] = None
+    
+    # Display error if any
+    if st.session_state["error"]:
+        st.markdown(f'<div class="warning">{st.session_state["error"]}</div>', unsafe_allow_html=True)
+        st.session_state["error"] = None  # Clear error after displaying
+    
+    # Main content area
+    if st.session_state["data"] is not None:
+        data = st.session_state["data"]
+        
+        # Find the min and max dates in the dataset
+        min_date = data["Date"].min().date()
+        max_date = data["Date"].max().date()
+        
+        # Create columns for filters
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # If Sport column exists in the dataset
+            if "Sport" in data.columns:
+                sports = ["Alla"] + sorted(data["Sport"].unique().tolist())
+                sport = st.selectbox("Idrott", sports, index=0)
+            else:
+                sport = "Innebandy"  # Default value
+                st.selectbox("Idrott", ["Innebandy"], index=0)
+            
+            # Date range selection
+            start_date = st.date_input(
+                "Från", 
+                value=min_date,
+                min_value=min_date,
+                max_value=max_date
+            )
+        
+        with col2:
+            # If District column exists in the dataset
+            if "District" in data.columns:
+                districts = ["Alla"] + sorted(data["District"].unique().tolist())
+                district = st.selectbox("Förbund", districts, index=0)
+            else:
+                district = "Västsvenska"  # Default value
+                st.selectbox("Förbund", ["Västsvenska"], index=0)
+            
+            # End date selection
+            end_date = st.date_input(
+                "Till", 
+                value=max_date,
+                min_value=min_date,
+                max_value=max_date
+            )
+        
+        # Additional filters
+        col3, col4 = st.columns(2)
+        
+        with col3:
+            min_matches = st.number_input(
+                "Minst antal matcher", 
+                min_value=0, 
+                value=0, 
+                help="Filtrera domare med minst detta antal matcher"
+            )
+        
+        with col4:
+            display_top_n = st.slider(
+                "Visa topp domare", 
+                min_value=5, 
+                max_value=50, 
+                value=20,
+                help="Antal domare att visa i statistiken"
+            )
+        
+        # Action buttons
+        col_btn1, col_btn2 = st.columns([1, 1])
+        
+        with col_btn1:
+            if st.button("Visa Statistik", use_container_width=True):
+                if start_date > end_date:
+                    st.markdown('<div class="warning">Startdatum måste vara före eller samma som slutdatum.</div>', unsafe_allow_html=True)
+                else:
                     # Filter and process the data
-                    filtered_data = filter_data(
-                        st.session_state["data"], 
+                    result, filtered_raw = filter_data_by_date(
+                        data, 
                         start_date, 
-                        end_date,
-                        district,
-                        series_filter
+                        end_date, 
+                        sport=sport if sport != "Alla" else None,
+                        district=district if district != "Alla" else None,
+                        min_matches=min_matches
                     )
                     
-                    if filtered_data is not None and not filtered_data.empty:
-                        result = generate_referee_stats(filtered_data)
-                        
-                        if result is not None and not result.empty:
-                            # Display the results
-                            st.write(f"### Domarstatistik ({start_date} till {end_date})")
-                            st.write(f"Totalt antal matcher i perioden: **{filtered_data['Matcher'].sum()}**")
-                            st.write(f"Antal domare i perioden: **{len(result)}**")
-                            
-                            # Create tabs for different views
-                            tab1, tab2 = st.tabs(["Tabell", "Visualiseringar"])
-                            
-                            with tab1:
-                                # Try to use column_config if available (for newer Streamlit versions)
-                                try:
-                                    st.dataframe(
-                                        result, 
-                                        column_config={
-                                            "Rank": st.column_config.NumberColumn("Rank", format="%d"),
-                                            "Domare": st.column_config.TextColumn("Domare"),
-                                            "Matcher": st.column_config.ProgressColumn(
-                                                "Antal Matcher",
-                                                format="%d",
-                                                min_value=0,
-                                                max_value=result["Matcher"].max(),
-                                            ),
-                                        },
-                                        use_container_width=True
-                                    )
-                                except:
-                                    # Fallback for older Streamlit versions
-                                    st.dataframe(result, use_container_width=True)
-                                
-                                # Download options
-                                col1, col2 = st.columns(2)
-                                with col1:
-                                    csv_data, csv_mime = get_downloadable_data(result, "csv")
-                                    if csv_data:
-                                        st.download_button(
-                                            label="Ladda ner som CSV",
-                                            data=csv_data,
-                                            file_name=f"referee_statistics_{start_date}_to_{end_date}.csv",
-                                            mime=csv_mime,
-                                        )
-                                
-                                with col2:
-                                    try:
-                                        excel_data, excel_mime = get_downloadable_data(result, "excel")
-                                        if excel_data:
-                                            st.download_button(
-                                                label="Ladda ner som Excel",
-                                                data=excel_data,
-                                                file_name=f"referee_statistics_{start_date}_to_{end_date}.xlsx",
-                                                mime=excel_mime,
-                                            )
-                                    except:
-                                        st.warning("Excel export requires xlsxwriter package.")
-                            
-                            with tab2:
-                                create_basic_charts(result, filtered_data)
-                        else:
-                            st.warning("Ingen data hittades för de valda filtren.")
-                    else:
-                        st.warning("Ingen data hittades för de valda filtren.")
+                    st.session_state["filtered_data"] = result
+                    st.session_state["filtered_raw"] = filtered_raw
+                    st.session_state["show_stats"] = True
         
-        # Add help section
-        with st.expander("Hjälp & Information"):
-            st.markdown("""
-            ### Hur man använder RefStat
+        with col_btn2:
+            if st.button("Återställ Filter", use_container_width=True):
+                st.session_state["show_stats"] = False
+                st.session_state["filtered_data"] = None
+                st.session_state["filtered_raw"] = None
+                st.experimental_rerun()
+        
+        # Display results if available
+        if st.session_state["show_stats"] and st.session_state["filtered_data"] is not None:
+            result = st.session_state["filtered_data"]
+            filtered_raw = st.session_state["filtered_raw"]
             
-            1. **Filtrera data** - Använd filteralternativen för att välja önskat datum och andra kriterier
-            2. **Visa statistik** - Klicka på knappen "Visa Statistik" för att se resultaten
-            3. **Ladda ner data** - Använd nedladdningsknapparna för att exportera resultaten
+            # Success message
+            period_text = f"{start_date.strftime('%Y-%m-%d')} till {end_date.strftime('%Y-%m-%d')}"
+            st.markdown(f'<div class="success">Visar statistik för perioden {period_text}</div>', unsafe_allow_html=True)
             
-            ### Kolumnförklaring
+            # Generate statistics
+            stats = generate_referee_stats(result)
             
-            - **Rank** - Domarens placering baserat på antal matcher
-            - **Domare** - Domarens namn
-            - **Matcher** - Totalt antal matcher som domaren har dömt under vald period
+            if stats:
+                # Display key metrics in cards
+                metric_cols = st.columns(4)
+                
+                with metric_cols[0]:
+                    st.markdown(f'''
+                    <div class="metric-card">
+                        <div class="metric-value">{stats["total_matches"]}</div>
+                        <div class="metric-label">Totalt antal matcher</div>
+                    </div>
+                    ''', unsafe_allow_html=True)
+                
+                with metric_cols[1]:
+                    st.markdown(f'''
+                    <div class="metric-card">
+                        <div class="metric-value">{stats["total_referees"]}</div>
+                        <div class="metric-label">Antal domare</div>
+                    </div>
+                    ''', unsafe_allow_html=True)
+                
+                with metric_cols[2]:
+                    st.markdown(f'''
+                    <div class="metric-card">
+                        <div class="metric-value">{stats["avg_matches"]:.1f}</div>
+                        <div class="metric-label">Genomsnitt matcher/domare</div>
+                    </div>
+                    ''', unsafe_allow_html=True)
+                
+                with metric_cols[3]:
+                    st.markdown(f'''
+                    <div class="metric-card">
+                        <div class="metric-value">{stats["most_active_count"]}</div>
+                        <div class="metric-label">Matcher (mest aktiv domare)</div>
+                    </div>
+                    ''', unsafe_allow_html=True)
             
-            ### Vanliga frågor
+            # Create visualizations
+            visualizations = create_visualizations(result, filtered_raw)
             
-            - **Varför ser jag inga data?** - Kontrollera att CSV-filen är korrekt formaterad och att filtren inte är för begränsade
-            - **Hur uppdaterar jag data?** - Ladda upp en ny CSV-fil med uppdaterad information
-            """)
+            # Display visualizations in tabs
+            if visualizations:
+                viz_tabs = st.tabs(["Topplista", "Fördelning", "Över Tid"])
+                
+                with viz_tabs[0]:
+                    if "top_referees" in visualizations:
+                        st.plotly_chart(visualizations["top_referees"], use_container_width=True)
+                
+                with viz_tabs[1]:
+                    if "match_distribution" in visualizations:
+                        st.plotly_chart(visualizations["match_distribution"], use_container_width=True)
+                
+                with viz_tabs[2]:
+                    if "matches_over_time" in visualizations:
+                        st.plotly_chart(visualizations["matches_over_time"], use_container_width=True)
+                    else:
+                        st.info("Tidsdata är inte tillgänglig för visualisering.")
+            
+            # Display the results table with pagination
+            st.markdown('<div class="sub-header">Domarstatistik</div>', unsafe_allow_html=True)
+            
+            # Limit to top N if there are many results
+            if len(result) > display_top_n:
+                st.info(f"Visar topp {display_top_n} av {len(result)} domare baserat på antal matcher")
+                result = result.head(display_top_n)
+            
+            # Add rank column
+            result.insert(0, "Rank", range(1, len(result) + 1))
+            
+            # Display the dataframe
+            st.dataframe(
+                result,
+                column_config={
+                    "Rank": st.column_config.NumberColumn("Rank", format="%d"),
+                    "Domare": st.column_config.TextColumn("Domare"),
+                    "Matcher": st.column_config.NumberColumn("Matcher", format="%d"),
+                },
+                hide_index=True,
+                use_container_width=True,
+            )
+            
+            # Download options
+            col_dl1, col_dl2 = st.columns(2)
+            
+            with col_dl1:
+                csv = result.to_csv(index=False)
+                st.download_button(
+                    label="Ladda ner som CSV",
+                    data=csv,
+                    file_name=f"domarstatistik_{start_date}_till_{end_date}.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+            
+            with col_dl2:
+                # Format as Excel
+                excel_buffer = pd.ExcelWriter(f"domarstatistik_{start_date}_till_{end_date}.xlsx")
+                result.to_excel(excel_buffer, index=False)
+                st.download_button(
+                    label="Ladda ner som Excel",
+                    data=excel_buffer,
+                    file_name=f"domarstatistik_{start_date}_till_{end_date}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+    
+    else:
+        # No data available, show instructions
+        st.info("""
+        Ingen data tillgänglig. Vänligen:
+        1. Ladda upp en CSV-fil med domarstatistik, eller
+        2. Sätt 'Använd standardfil' och kontrollera att 'vsibf.csv' finns tillgänglig
+        
+        CSV-filen bör innehålla kolumnerna: Date, Domare, Matcher (och eventuellt Sport, District)
+        """)
+    
+    # Footer
+    st.markdown('<div class="footer">© 2025 RefStat - Domarstatistik</div>', unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
