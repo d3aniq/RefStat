@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import os
 from datetime import datetime, timedelta
 import io
@@ -117,9 +116,9 @@ def generate_referee_stats(filtered_df):
     
     return grouped
 
-# Function to create charts
-def create_charts(stats_df, filtered_df):
-    """Create visualizations for the data."""
+# Function to create basic charts with Streamlit's native plotting
+def create_basic_charts(stats_df, filtered_df):
+    """Create basic visualizations using Streamlit's native chart capabilities."""
     if stats_df is None or stats_df.empty:
         return
     
@@ -128,41 +127,22 @@ def create_charts(stats_df, filtered_df):
     with col1:
         # Top referees bar chart
         top_n = min(15, len(stats_df))
-        fig1 = px.bar(
-            stats_df.head(top_n),
-            x="Domare",
-            y="Matcher",
-            title=f"Top {top_n} Referees by Number of Matches",
-            labels={"Matcher": "Number of Matches", "Domare": "Referee"},
-            color="Matcher",
-            color_continuous_scale="Blues"
-        )
-        fig1.update_layout(xaxis={'categoryorder':'total descending'})
-        st.plotly_chart(fig1, use_container_width=True)
+        st.subheader(f"Top {top_n} Referees by Number of Matches")
+        st.bar_chart(stats_df.head(top_n).set_index("Domare")["Matcher"])
     
     with col2:
-        # Pie chart showing distribution
-        fig2 = px.pie(
-            stats_df.head(10),
-            values="Matcher",
-            names="Domare",
-            title="Distribution of Matches Among Top 10 Referees",
-            hole=0.4
-        )
-        st.plotly_chart(fig2, use_container_width=True)
-    
-    # Time series analysis if we have at least 5 dates in the filtered data
-    if "DateObj" in filtered_df.columns:
-        date_counts = filtered_df.groupby(filtered_df["DateObj"].dt.date)["Matcher"].sum().reset_index()
-        if len(date_counts) >= 5:
-            fig3 = px.line(
-                date_counts,
-                x="DateObj",
-                y="Matcher",
-                title="Number of Matches Over Time",
-                labels={"DateObj": "Date", "Matcher": "Total Matches"}
-            )
-            st.plotly_chart(fig3, use_container_width=True)
+        # Monthly match distribution if we have date data
+        if "DateObj" in filtered_df.columns:
+            st.subheader("Monthly Distribution of Matches")
+            filtered_df['Month'] = filtered_df["DateObj"].dt.strftime('%Y-%m')
+            monthly_data = filtered_df.groupby('Month')["Matcher"].sum().reset_index()
+            
+            # Sort by date
+            monthly_data['SortDate'] = pd.to_datetime(monthly_data['Month'])
+            monthly_data = monthly_data.sort_values('SortDate')
+            
+            # Plot the chart
+            st.line_chart(monthly_data.set_index('Month')["Matcher"])
 
 # Function to export data
 def get_downloadable_data(stats_df, format_type="csv"):
@@ -308,20 +288,25 @@ def main():
                             tab1, tab2 = st.tabs(["Tabell", "Visualiseringar"])
                             
                             with tab1:
-                                st.dataframe(
-                                    result, 
-                                    column_config={
-                                        "Rank": st.column_config.NumberColumn("Rank", format="%d"),
-                                        "Domare": st.column_config.TextColumn("Domare"),
-                                        "Matcher": st.column_config.ProgressColumn(
-                                            "Antal Matcher",
-                                            format="%d",
-                                            min_value=0,
-                                            max_value=result["Matcher"].max(),
-                                        ),
-                                    },
-                                    use_container_width=True
-                                )
+                                # Try to use column_config if available (for newer Streamlit versions)
+                                try:
+                                    st.dataframe(
+                                        result, 
+                                        column_config={
+                                            "Rank": st.column_config.NumberColumn("Rank", format="%d"),
+                                            "Domare": st.column_config.TextColumn("Domare"),
+                                            "Matcher": st.column_config.ProgressColumn(
+                                                "Antal Matcher",
+                                                format="%d",
+                                                min_value=0,
+                                                max_value=result["Matcher"].max(),
+                                            ),
+                                        },
+                                        use_container_width=True
+                                    )
+                                except:
+                                    # Fallback for older Streamlit versions
+                                    st.dataframe(result, use_container_width=True)
                                 
                                 # Download options
                                 col1, col2 = st.columns(2)
@@ -336,17 +321,20 @@ def main():
                                         )
                                 
                                 with col2:
-                                    excel_data, excel_mime = get_downloadable_data(result, "excel")
-                                    if excel_data:
-                                        st.download_button(
-                                            label="Ladda ner som Excel",
-                                            data=excel_data,
-                                            file_name=f"referee_statistics_{start_date}_to_{end_date}.xlsx",
-                                            mime=excel_mime,
-                                        )
+                                    try:
+                                        excel_data, excel_mime = get_downloadable_data(result, "excel")
+                                        if excel_data:
+                                            st.download_button(
+                                                label="Ladda ner som Excel",
+                                                data=excel_data,
+                                                file_name=f"referee_statistics_{start_date}_to_{end_date}.xlsx",
+                                                mime=excel_mime,
+                                            )
+                                    except:
+                                        st.warning("Excel export requires xlsxwriter package.")
                             
                             with tab2:
-                                create_charts(result, filtered_data)
+                                create_basic_charts(result, filtered_data)
                         else:
                             st.warning("Ingen data hittades för de valda filtren.")
                     else:
