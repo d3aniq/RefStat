@@ -1,8 +1,6 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
-import plotly.express as px
-import plotly.graph_objects as go
 import os
 
 # Set page configuration
@@ -165,72 +163,6 @@ def generate_referee_stats(filtered_df):
     stats["most_active_count"] = most_active.iloc[0] if len(most_active) > 0 else 0
     
     return stats
-
-# Function to create visualizations
-def create_visualizations(result_df, filtered_raw_df):
-    visualizations = {}
-    
-    if result_df is None or result_df.empty:
-        return visualizations
-    
-    # 1. Top referees bar chart
-    top_n = min(10, len(result_df))
-    top_referees = result_df.head(top_n)
-    fig_top = px.bar(
-        top_referees,
-        x="Domare",
-        y="Matcher",
-        title=f"Topp {top_n} Domare efter Antal Matcher",
-        labels={"Domare": "Domare", "Matcher": "Antal Matcher"},
-        color="Matcher",
-        color_continuous_scale="Blues",
-    )
-    fig_top.update_layout(
-        xaxis_title="Domare",
-        yaxis_title="Antal Matcher",
-        xaxis={'categoryorder':'total descending'},
-        plot_bgcolor="white",
-        font=dict(family="Arial", size=12),
-    )
-    visualizations["top_referees"] = fig_top
-    
-    # 2. Distribution of matches histogram
-    fig_dist = px.histogram(
-        result_df,
-        x="Matcher",
-        nbins=20,
-        title="Fördelning av Matcher per Domare",
-        labels={"Matcher": "Antal Matcher", "count": "Antal Domare"},
-        color_discrete_sequence=["#1E3A8A"],
-    )
-    fig_dist.update_layout(
-        xaxis_title="Antal Matcher",
-        yaxis_title="Antal Domare",
-        plot_bgcolor="white",
-        bargap=0.1,
-    )
-    visualizations["match_distribution"] = fig_dist
-    
-    # 3. Matches over time (if raw data is available)
-    if filtered_raw_df is not None and not filtered_raw_df.empty and "Date" in filtered_raw_df.columns:
-        # Aggregate matches by date
-        matches_by_date = filtered_raw_df.groupby(filtered_raw_df["Date"].dt.date)["Matcher"].sum().reset_index()
-        fig_time = px.line(
-            matches_by_date,
-            x="Date",
-            y="Matcher",
-            title="Matcher över Tid",
-            labels={"Date": "Datum", "Matcher": "Antal Matcher"},
-            markers=True,
-        )
-        fig_time.update_layout(
-            xaxis_title="Datum",
-            yaxis_title="Antal Matcher",
-            plot_bgcolor="white",
-        )
-        visualizations["matches_over_time"] = fig_time
-    
-    return visualizations
 
 # Main application layout
 def main():
@@ -407,24 +339,25 @@ def main():
                     </div>
                     ''', unsafe_allow_html=True)
             
-            # Create visualizations
-            visualizations = create_visualizations(result, filtered_raw)
+            # Simple visualizations using Streamlit's native charts
+            st.markdown('<div class="sub-header">Visualiseringar</div>', unsafe_allow_html=True)
             
-            # Display visualizations in tabs
-            if visualizations:
-                viz_tabs = st.tabs(["Topplista", "Fördelning", "Över Tid"])
+            # Top referees bar chart
+            if not result.empty:
+                chart_tabs = st.tabs(["Topplista", "Över Tid"])
                 
-                with viz_tabs[0]:
-                    if "top_referees" in visualizations:
-                        st.plotly_chart(visualizations["top_referees"], use_container_width=True)
+                with chart_tabs[0]:
+                    # Show top 10 referees or all if less than 10
+                    top_n = min(10, len(result))
+                    st.bar_chart(result.head(top_n).set_index('Domare')['Matcher'], use_container_width=True)
                 
-                with viz_tabs[1]:
-                    if "match_distribution" in visualizations:
-                        st.plotly_chart(visualizations["match_distribution"], use_container_width=True)
-                
-                with viz_tabs[2]:
-                    if "matches_over_time" in visualizations:
-                        st.plotly_chart(visualizations["matches_over_time"], use_container_width=True)
+                with chart_tabs[1]:
+                    # Show matches over time if available
+                    if filtered_raw is not None and not filtered_raw.empty:
+                        # Aggregate by date
+                        matches_by_date = filtered_raw.groupby(filtered_raw["Date"].dt.date)["Matcher"].sum().reset_index()
+                        matches_by_date = matches_by_date.rename(columns={"Date": "index"}).set_index("index")
+                        st.line_chart(matches_by_date, use_container_width=True)
                     else:
                         st.info("Tidsdata är inte tillgänglig för visualisering.")
             
@@ -465,14 +398,13 @@ def main():
                 )
             
             with col_dl2:
-                # Format as Excel
-                excel_buffer = pd.ExcelWriter(f"domarstatistik_{start_date}_till_{end_date}.xlsx")
-                result.to_excel(excel_buffer, index=False)
+                # Second download button - we'll make it a CSV with different formatting
+                csv_semicolon = result.to_csv(index=False, sep=';')
                 st.download_button(
-                    label="Ladda ner som Excel",
-                    data=excel_buffer,
-                    file_name=f"domarstatistik_{start_date}_till_{end_date}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    label="Ladda ner för Excel",
+                    data=csv_semicolon,
+                    file_name=f"domarstatistik_{start_date}_till_{end_date}_excel.csv",
+                    mime="text/csv",
                     use_container_width=True,
                 )
     
